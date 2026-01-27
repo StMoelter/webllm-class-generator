@@ -52,6 +52,7 @@ web_modules/
 
 # Optional eslint cache
 .eslintcache
+reports/
 
 # Optional stylelint cache
 .stylelintcache
@@ -81,6 +82,7 @@ out
 # Nuxt.js build / generate output
 .nuxt
 dist
+dist-singlefile
 
 # Gatsby files
 .cache/
