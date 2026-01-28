@@ -14,13 +14,22 @@ npm run dev
 
 ## Usage
 1. Enter what your class is good for (in English).
-2. Submit the form to generate ten intentionally overcomplicated class names.
-3. Watch the model loading progress bar and spinner if the model is still downloading.
-4. Review the output in the results panel styled as a modern card layout.
+2. Use the settings gear to adjust the prompt template and temperature if needed.
+3. Submit the form to generate ten intentionally overcomplicated class names.
+4. Watch the model loading progress bar while the model downloads on page load.
+5. Review the output in the results panel styled as a modern card layout.
 
 The prompt template lives in `src/prompt.ts`, and supported models are defined in
 `src/models.ts`. The app currently loads the Qwen2.5-Coder-0.5B-Instruct-q4f16_1-MLC
 model from Hugging Face at runtime.
+
+## Locked product requirements (do not modify without explicit approval)
+- The model begins downloading immediately when the page loads, with a visible progress bar.
+- The submit button remains disabled until the model has finished loading.
+- The loading progress bar reflects model download progress on page load, not after submit.
+- Users can edit the prompt template and temperature via the settings overlay.
+
+These requirements are fixed for this project and should not be altered by coding agents or refactors.
 
 ## Scripts
 - `npm run dev` - start the development server.

@@ -12,7 +12,7 @@ type WebLlmChatCompletion = {
 export type WebLlmEngine = {
   chat: {
     completions: {
-      create: (payload: { messages: WebLlmMessage[] }) =>
+      create: (payload: { messages: WebLlmMessage[]; temperature?: number }) =>
         Promise<WebLlmChatCompletion>;
     };
   };
