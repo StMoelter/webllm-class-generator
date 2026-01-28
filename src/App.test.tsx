@@ -8,7 +8,7 @@ import {
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { App } from "./App";
+import { App, MAX_OUTPUT_TOKENS, MAX_THINK_TIME_MS } from "./App";
 import { SUPPORTED_MODELS } from "./models";
 import { PROMPT_TEMPLATE } from "./prompt";
 import { createWebLlmEngine } from "./webllmClient";
@@ -17,12 +17,17 @@ type ChatCompletion = {
   choices: Array<{ message?: { content?: string } }>;
 };
 
+type ChatCompletionChunk = {
+  choices: Array<{ delta?: { content?: string } }>;
+};
+
 type MockEngine = {
   chat: {
     completions: {
       create: ReturnType<typeof vi.fn>;
     };
   };
+  interruptGenerate?: ReturnType<typeof vi.fn>;
   resetChat: ReturnType<typeof vi.fn>;
 };
 
@@ -41,6 +46,7 @@ describe("App", () => {
         create: vi.fn()
       }
     },
+    interruptGenerate: vi.fn(),
     resetChat: vi.fn()
   });
 
@@ -60,6 +66,15 @@ describe("App", () => {
     };
   };
 
+  const createStream = (chunks: string[]): AsyncIterable<ChatCompletionChunk> =>
+    ({
+      async *[Symbol.asyncIterator]() {
+        for (const chunk of chunks) {
+          yield { choices: [{ delta: { content: chunk } }] };
+        }
+      }
+    }) satisfies AsyncIterable<ChatCompletionChunk>;
+
   const setupEngine = (result: ChatCompletion | Error) => {
     const engine = createEngine();
 
@@ -69,6 +84,13 @@ describe("App", () => {
       engine.chat.completions.create.mockResolvedValue(result);
     }
 
+    vi.mocked(createWebLlmEngine).mockResolvedValue(engine);
+    return engine;
+  };
+
+  const setupStreamingEngine = (chunks: string[]) => {
+    const engine = createEngine();
+    engine.chat.completions.create.mockResolvedValue(createStream(chunks));
     vi.mocked(createWebLlmEngine).mockResolvedValue(engine);
     return engine;
   };
@@ -171,7 +193,9 @@ describe("App", () => {
     );
     expect(engine.chat.completions.create).toHaveBeenCalledWith({
       messages: [{ role: "user", content: expectedPrompt }],
-      temperature: 0.7
+      temperature: 0.9,
+      max_tokens: MAX_OUTPUT_TOKENS,
+      stream: true
     });
 
     expect(await screen.findByText(/complexclassone/i)).toBeInTheDocument();
@@ -341,7 +365,7 @@ describe("App", () => {
 
     const region = screen.getByRole("heading", {
       name: /generated class names/i
-    }).parentElement;
+    }).closest("section");
     expect(region).not.toBeNull();
     expect(
       within(region as HTMLElement).getByText(/generating class names/i)
@@ -428,7 +452,7 @@ describe("App", () => {
     fireEvent.change(temperatureInput, { target: { value: "0.3" } });
 
     await user.click(
-      screen.getByRole("button", { name: /close settings/i })
+      screen.getByRole("button", { name: /save settings/i })
     );
 
     await user.type(
@@ -446,8 +470,305 @@ describe("App", () => {
           content: "Custom prompt for audit trails with extras"
         }
       ],
-      temperature: 0.3
+      temperature: 0.3,
+      max_tokens: MAX_OUTPUT_TOKENS,
+      stream: true
     });
+  });
+
+  it("keeps previous settings when the dialog is closed without saving", async () => {
+    const user = userEvent.setup();
+    const engine = setupEngine(createCompletion("Defaults"));
+
+    render(<App />);
+    await waitForModelReady();
+
+    await user.click(screen.getByRole("button", { name: /open settings/i }));
+
+    fireEvent.change(screen.getByLabelText(/prompt template/i), {
+      target: { value: "Updated prompt for {{CLASS_PURPOSE}}" }
+    });
+    fireEvent.change(screen.getByLabelText(/temperature/i), {
+      target: { value: "0.2" }
+    });
+
+    await user.click(
+      screen.getByRole("button", { name: /close settings/i })
+    );
+
+    await user.type(
+      screen.getByLabelText(/what is your class good for/i),
+      "release automation"
+    );
+    await user.click(
+      screen.getByRole("button", { name: /submit class purpose/i })
+    );
+
+    expect(engine.chat.completions.create).toHaveBeenCalledWith({
+      messages: [
+        {
+          role: "user",
+          content: PROMPT_TEMPLATE.replace(
+            "{{CLASS_PURPOSE}}",
+            "release automation"
+          )
+        }
+      ],
+      temperature: 0.9,
+      max_tokens: MAX_OUTPUT_TOKENS,
+      stream: true
+    });
+  });
+
+  it("streams output updates as tokens arrive", async () => {
+    const user = userEvent.setup();
+    setupStreamingEngine(["FirstLine", "", "\nSecondLine"]);
+
+    render(<App />);
+    await waitForModelReady();
+
+    await user.type(
+      screen.getByLabelText(/what is your class good for/i),
+      "data routing"
+    );
+    await user.click(
+      screen.getByRole("button", { name: /submit class purpose/i })
+    );
+
+    expect(await screen.findByText(/firstline/i)).toBeInTheDocument();
+    expect(await screen.findByText(/secondline/i)).toBeInTheDocument();
+  });
+
+  it("ignores streaming chunks without content", async () => {
+    const user = userEvent.setup();
+    const engine = createEngine();
+
+    engine.chat.completions.create.mockResolvedValue({
+      async *[Symbol.asyncIterator]() {
+        yield { choices: [] };
+        yield { choices: [{ delta: { content: "VisibleClass" } }] };
+      }
+    });
+    vi.mocked(createWebLlmEngine).mockResolvedValue(engine);
+
+    render(<App />);
+    await waitForModelReady();
+
+    await user.type(
+      screen.getByLabelText(/what is your class good for/i),
+      "telemetry"
+    );
+    await user.click(
+      screen.getByRole("button", { name: /submit class purpose/i })
+    );
+
+    expect(await screen.findByText(/visibleclass/i)).toBeInTheDocument();
+  });
+
+  it("formats long generation times in minutes", async () => {
+    const deferred = createDeferred<ChatCompletion>();
+    const engine = createEngine();
+
+    engine.chat.completions.create.mockReturnValue(deferred.promise);
+    vi.mocked(createWebLlmEngine).mockResolvedValue(engine);
+
+    render(<App />);
+    await waitForModelReady();
+
+    fireEvent.change(screen.getByLabelText(/what is your class good for/i), {
+      target: { value: "slow analytics" }
+    });
+
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(0));
+
+    try {
+      fireEvent.click(
+        screen.getByRole("button", { name: /submit class purpose/i })
+      );
+
+      await act(async () => {
+        vi.advanceTimersByTime(65000);
+      });
+
+      await act(async () => {
+        deferred.resolve(createCompletion("SlowClass"));
+        await deferred.promise;
+      });
+
+      expect(
+        screen.getByText(/generation time: 1m 05s/i)
+      ).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("shows prompt details in the info overlay", async () => {
+    const user = userEvent.setup();
+    setupEngine(createCompletion("InfoClass"));
+
+    render(<App />);
+    await waitForModelReady();
+
+    await user.type(
+      screen.getByLabelText(/what is your class good for/i),
+      "governance workflows"
+    );
+    await user.click(
+      screen.getByRole("button", { name: /submit class purpose/i })
+    );
+
+    await screen.findByText(/infoclass/i);
+
+    await user.click(
+      screen.getByRole("button", { name: /show last prompt details/i })
+    );
+
+    expect(
+      screen.getByRole("heading", { name: /last prompt details/i })
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/generate ten intentionally overcomplicated class names/i)
+    ).toBeInTheDocument();
+    expect(screen.getByText("0.90")).toBeInTheDocument();
+
+    await user.click(
+      screen.getByRole("heading", { name: /last prompt details/i })
+    );
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+
+    await user.click(
+      screen.getByRole("button", { name: /close prompt details/i })
+    );
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+
+    await user.click(
+      screen.getByRole("button", { name: /show last prompt details/i })
+    );
+
+    fireEvent.click(screen.getByRole("dialog"));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("interrupts generation after the maximum think time without erroring", async () => {
+    const deferred = createDeferred<void>();
+    const engine = createEngine();
+
+    engine.chat.completions.create.mockResolvedValue({
+      async *[Symbol.asyncIterator]() {
+        await deferred.promise;
+      }
+    });
+    engine.interruptGenerate?.mockImplementation(async () => {
+      deferred.resolve();
+    });
+
+    vi.mocked(createWebLlmEngine).mockResolvedValue(engine);
+
+    render(<App />);
+    await waitForModelReady();
+
+    fireEvent.change(screen.getByLabelText(/what is your class good for/i), {
+      target: { value: "fraud detection" }
+    });
+
+    vi.useFakeTimers();
+    try {
+      fireEvent.click(
+        screen.getByRole("button", { name: /submit class purpose/i })
+      );
+
+      expect(screen.getByText(/thinking for/i)).toBeInTheDocument();
+
+      await act(async () => {
+        vi.advanceTimersByTime(MAX_THINK_TIME_MS);
+      });
+
+      expect(engine.interruptGenerate).toHaveBeenCalledTimes(1);
+      await act(async () => {
+        await deferred.promise;
+      });
+
+      expect(screen.getByText(/no response received/i)).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps partial results when the request fails after a timeout", async () => {
+    const deferred = createDeferred<ChatCompletion>();
+    const engine = createEngine();
+
+    engine.chat.completions.create.mockReturnValue(deferred.promise);
+    vi.mocked(createWebLlmEngine).mockResolvedValue(engine);
+
+    render(<App />);
+    await waitForModelReady();
+
+    fireEvent.change(screen.getByLabelText(/what is your class good for/i), {
+      target: { value: "risk modeling" }
+    });
+
+    vi.useFakeTimers();
+    try {
+      fireEvent.click(
+        screen.getByRole("button", { name: /submit class purpose/i })
+      );
+
+      await act(async () => {
+        vi.advanceTimersByTime(MAX_THINK_TIME_MS);
+      });
+
+      await act(async () => {
+        deferred.reject(new Error("late failure"));
+        await deferred.promise.catch(() => undefined);
+      });
+
+      expect(screen.getByText(/no response received/i)).toBeInTheDocument();
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("preserves streamed output when a timeout occurs mid-stream", async () => {
+    const engine = createEngine();
+
+    engine.chat.completions.create.mockResolvedValue({
+      async *[Symbol.asyncIterator]() {
+        yield { choices: [{ delta: { content: "PartialResult" } }] };
+        await new Promise((resolve) => setTimeout(resolve, 1));
+        throw new Error("stream fail");
+      }
+    });
+    vi.mocked(createWebLlmEngine).mockResolvedValue(engine);
+
+    render(<App />);
+    await waitForModelReady();
+
+    fireEvent.change(screen.getByLabelText(/what is your class good for/i), {
+      target: { value: "forecasting" }
+    });
+
+    vi.useFakeTimers();
+    try {
+      fireEvent.click(
+        screen.getByRole("button", { name: /submit class purpose/i })
+      );
+
+      await act(async () => {
+        vi.advanceTimersByTime(MAX_THINK_TIME_MS);
+      });
+      await act(async () => {
+        vi.advanceTimersByTime(1);
+      });
+
+      expect(screen.getByText(/partialresult/i)).toBeInTheDocument();
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("keeps the settings panel open when clicking inside and closes on backdrop", async () => {
