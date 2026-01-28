@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
@@ -61,9 +61,9 @@ describe("App", () => {
     expect(
       screen.getByText(/describe what your class does/i)
     ).toBeInTheDocument();
-    expect(
-      screen.getByLabelText(/what is your class good for/i)
-    ).toBeInTheDocument();
+    const input = screen.getByLabelText(/what is your class good for/i);
+    expect(input).toBeInTheDocument();
+    expect(input).toHaveAttribute("rows", "3");
     expect(
       screen.getByRole("button", { name: /submit class purpose/i })
     ).toBeDisabled();
@@ -112,7 +112,10 @@ describe("App", () => {
       "data ingestion pipelines"
     );
 
-    expect(createWebLlmEngine).toHaveBeenCalledWith(SUPPORTED_MODELS[0].id);
+    expect(createWebLlmEngine).toHaveBeenCalledWith(
+      SUPPORTED_MODELS[0].id,
+      expect.any(Function)
+    );
     expect(engine.chat.completions.create).toHaveBeenCalledWith({
       messages: [{ role: "user", content: expectedPrompt }]
     });
@@ -146,6 +149,75 @@ describe("App", () => {
 
     expect(createWebLlmEngine).toHaveBeenCalledTimes(1);
     expect(engine.chat.completions.create).toHaveBeenCalledTimes(2);
+  });
+
+  it("shows model loading progress while initializing", async () => {
+    const user = userEvent.setup();
+    let resolveEngine: (engine: MockEngine) => void;
+    let progressCallback: ((report: {
+      progress: number;
+      timeElapsed: number;
+      text: string;
+    }) => void) | null = null;
+
+    const engine: MockEngine = {
+      chat: {
+        completions: {
+          create: vi.fn().mockResolvedValue(createCompletion("LoadedClass"))
+        }
+      },
+      resetChat: vi.fn()
+    };
+
+    const enginePromise = new Promise<MockEngine>((resolve) => {
+      resolveEngine = resolve;
+    });
+
+    vi.mocked(createWebLlmEngine).mockImplementation(
+      async (_modelId, onProgress) => {
+        progressCallback = onProgress ?? null;
+        return enginePromise;
+      }
+    );
+
+    render(<App />);
+
+    const input = screen.getByLabelText(/what is your class good for/i);
+    await user.type(input, "log routing");
+    await user.click(
+      screen.getByRole("button", { name: /submit class purpose/i })
+    );
+
+    expect(
+      screen.getByRole("button", { name: /submit class purpose/i })
+    ).toBeDisabled();
+    expect(input).toBeEnabled();
+
+    const progressBar = await screen.findByRole("progressbar", {
+      name: /model loading progress/i
+    });
+    expect(progressBar).toBeInTheDocument();
+
+    await act(async () => {
+      progressCallback?.({
+        progress: 0.4,
+        timeElapsed: 1,
+        text: "Downloading model artifacts"
+      });
+    });
+
+    expect(progressBar).toHaveAttribute("value", "0.4");
+    expect(
+      screen.getByText(/downloading model artifacts/i)
+    ).toBeInTheDocument();
+
+    await act(async () => {
+      resolveEngine(engine);
+    });
+
+    expect(
+      await screen.findByText(/loadedclass/i)
+    ).toBeInTheDocument();
   });
 
   it("handles missing content in the completion response", async () => {
