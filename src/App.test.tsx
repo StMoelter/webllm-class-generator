@@ -657,6 +657,7 @@ describe("App", () => {
 
     engine.chat.completions.create.mockResolvedValue({
       async *[Symbol.asyncIterator]() {
+        yield { choices: [] };
         await deferred.promise;
       }
     });

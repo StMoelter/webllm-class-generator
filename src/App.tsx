@@ -1,6 +1,10 @@
 import { useEffect, useRef, useState } from "react";
+import { OutputPanel } from "./components/OutputPanel";
+import { PromptInfoOverlay } from "./components/PromptInfoOverlay";
+import { SettingsOverlay } from "./components/SettingsOverlay";
 import { SUPPORTED_MODELS } from "./models";
 import { buildPrompt, PROMPT_TEMPLATE } from "./prompt";
+import { formatDuration } from "./utils/formatDuration";
 import { createWebLlmEngine, type WebLlmEngine } from "./webllmClient";
 import "./App.css";
 
@@ -14,18 +18,6 @@ const DEFAULT_TEMPERATURE = 0.9;
 export const MAX_OUTPUT_TOKENS = 256;
 export const MAX_THINK_TIME_MS = 15000;
 const THINK_INTERVAL_MS = 200;
-
-const formatDuration = (milliseconds: number) => {
-  const totalSeconds = milliseconds / 1000;
-  if (totalSeconds < 60) {
-    return `${totalSeconds.toFixed(1)}s`;
-  }
-  const minutes = Math.floor(totalSeconds / 60);
-  const seconds = Math.round(totalSeconds % 60)
-    .toString()
-    .padStart(2, "0");
-  return `${minutes}m ${seconds}s`;
-};
 
 const isAsyncIterable = (
   value: unknown
@@ -278,147 +270,34 @@ export const App = () => {
           )}
         </form>
       </section>
-      {isSettingsOpen && (
-        <div
-          className="settings-overlay"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="settings-title"
-          onClick={() => setIsSettingsOpen(false)}
-        >
-          <div
-            className="settings-panel"
-            onClick={(event) => event.stopPropagation()}
-          >
-            <div className="settings-panel__header">
-              <h2 id="settings-title">Settings</h2>
-              <button
-                type="button"
-                className="settings-close"
-                aria-label="Close settings"
-                onClick={() => setIsSettingsOpen(false)}
-              >
-                ✕
-              </button>
-            </div>
-            <div className="settings-panel__body">
-              <label htmlFor="prompt-template">Prompt template</label>
-              <textarea
-                id="prompt-template"
-                name="prompt-template"
-                rows={6}
-                value={draftPromptTemplate}
-                onChange={(event) => setDraftPromptTemplate(event.target.value)}
-              />
-              <p className="settings-panel__hint">
-                Use {"{{CLASS_PURPOSE}}"} as the placeholder for the class
-                description.
-              </p>
-              <label htmlFor="temperature">Temperature</label>
-              <div className="settings-panel__slider">
-                <input
-                  id="temperature"
-                  type="range"
-                  min={0}
-                  max={1}
-                  step={0.05}
-                  value={draftTemperature}
-                  onChange={(event) =>
-                    setDraftTemperature(Number(event.target.value))
-                  }
-                />
-                <span>{draftTemperature.toFixed(2)}</span>
-              </div>
-            </div>
-            <div className="settings-panel__actions">
-              <button
-                type="button"
-                className="settings-save"
-                onClick={() => {
-                  setPromptTemplate(draftPromptTemplate);
-                  setTemperature(draftTemperature);
-                  setIsSettingsOpen(false);
-                }}
-              >
-                Save settings
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-      {isPromptInfoOpen && lastSubmission && (
-        <div
-          className="info-overlay"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="prompt-info-title"
-          onClick={() => setIsPromptInfoOpen(false)}
-        >
-          <div
-            className="info-panel"
-            onClick={(event) => event.stopPropagation()}
-          >
-            <div className="info-panel__header">
-              <h2 id="prompt-info-title">Last prompt details</h2>
-              <button
-                type="button"
-                className="info-close"
-                aria-label="Close prompt details"
-                onClick={() => setIsPromptInfoOpen(false)}
-              >
-                ✕
-              </button>
-            </div>
-            <div className="info-panel__body">
-              <div className="info-panel__meta">
-                <span>Temperature</span>
-                <strong>{lastSubmission.temperature.toFixed(2)}</strong>
-              </div>
-              <label className="info-panel__label" htmlFor="prompt-preview">
-                Prompt
-              </label>
-              <pre id="prompt-preview" className="info-panel__prompt">
-                {lastSubmission.prompt}
-              </pre>
-            </div>
-          </div>
-        </div>
-      )}
-      <section aria-live="polite" className="output">
-        <div className="output__header">
-          <h2>Generated class names</h2>
-          {lastSubmission && (
-            <button
-              type="button"
-              className="info-button"
-              aria-label="Show last prompt details"
-              onClick={() => setIsPromptInfoOpen(true)}
-            >
-              ℹ️
-            </button>
-          )}
-        </div>
-        {status === "idle" && (
-          <p>Submit a class purpose to generate class names.</p>
-        )}
-        {status === "loading" && (
-          <div className="output__status">
-            <p>Generating class names...</p>
-            <span className="output__timer">
-              Thinking for {formatDuration(generationElapsedMs)}
-            </span>
-          </div>
-        )}
-        {status === "success" && generationDurationMs !== null && (
-          <p className="output__timer">
-            Generation time: {formatDuration(generationDurationMs)}
-          </p>
-        )}
-        {status === "error" && <p role="alert">{errorMessage}</p>}
-        {(status === "loading" || status === "success") && output && (
-          <pre>{output}</pre>
-        )}
-      </section>
+      <SettingsOverlay
+        isOpen={isSettingsOpen}
+        draftPromptTemplate={draftPromptTemplate}
+        draftTemperature={draftTemperature}
+        onDraftPromptTemplateChange={setDraftPromptTemplate}
+        onDraftTemperatureChange={setDraftTemperature}
+        onClose={() => setIsSettingsOpen(false)}
+        onSave={() => {
+          setPromptTemplate(draftPromptTemplate);
+          setTemperature(draftTemperature);
+          setIsSettingsOpen(false);
+        }}
+      />
+      <PromptInfoOverlay
+        isOpen={isPromptInfoOpen}
+        submission={lastSubmission}
+        onClose={() => setIsPromptInfoOpen(false)}
+      />
+      <OutputPanel
+        status={status}
+        output={output}
+        errorMessage={errorMessage}
+        hasSubmission={Boolean(lastSubmission)}
+        generationElapsedMs={generationElapsedMs}
+        generationDurationMs={generationDurationMs}
+        formatDuration={formatDuration}
+        onShowPromptInfo={() => setIsPromptInfoOpen(true)}
+      />
     </main>
   );
 };
