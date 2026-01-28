@@ -1,6 +1,6 @@
 # WebLLM Class Generator
 
-A React-based starter for generating classes with WebLLM, built with TDD in mind.
+A React-based tool that generates advanced class names using WebLLM.
 
 ## Requirements
 - Node.js 20+
@@ -11,6 +11,15 @@ A React-based starter for generating classes with WebLLM, built with TDD in mind
 npm install
 npm run dev
 ```
+
+## Usage
+1. Enter what your class is good for (in English).
+2. Submit the form to generate ten complicated class names.
+3. Review the output in the results panel styled as a modern card layout.
+
+The prompt template lives in `src/prompt.ts`, and supported models are defined in
+`src/models.ts`. The app currently loads the Qwen2.5-Coder-0.5B-Instruct-q4f16_1-MLC
+model from Hugging Face at runtime.
 
 ## Scripts
 - `npm run dev` - start the development server.
