@@ -14,8 +14,9 @@ npm run dev
 
 ## Usage
 1. Enter what your class is good for (in English).
-2. Submit the form to generate ten complicated class names.
-3. Review the output in the results panel styled as a modern card layout.
+2. Submit the form to generate ten intentionally overcomplicated class names.
+3. Watch the model loading progress bar and spinner if the model is still downloading.
+4. Review the output in the results panel styled as a modern card layout.
 
 The prompt template lives in `src/prompt.ts`, and supported models are defined in
 `src/models.ts`. The app currently loads the Qwen2.5-Coder-0.5B-Instruct-q4f16_1-MLC

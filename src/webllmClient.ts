@@ -1,4 +1,4 @@
-import { CreateMLCEngine } from "@mlc-ai/web-llm";
+import { CreateMLCEngine, type InitProgressReport } from "@mlc-ai/web-llm";
 
 type WebLlmMessage = {
   role: "user" | "assistant" | "system";
@@ -19,5 +19,11 @@ export type WebLlmEngine = {
   resetChat: () => void;
 };
 
-export const createWebLlmEngine = async (modelId: string) =>
-  (await CreateMLCEngine(modelId)) as WebLlmEngine;
+export const createWebLlmEngine = async (
+  modelId: string,
+  onProgress?: (report: InitProgressReport) => void
+) =>
+  (await CreateMLCEngine(
+    modelId,
+    onProgress ? { initProgressCallback: onProgress } : undefined
+  )) as WebLlmEngine;
