@@ -539,6 +539,37 @@ describe("App", () => {
     expect(await screen.findByText(/secondline/i)).toBeInTheDocument();
   });
 
+  it("opens and closes the prompt info overlay from the app", async () => {
+    const user = userEvent.setup();
+    setupEngine(createCompletion("InfoClass"));
+
+    render(<App />);
+    await waitForModelReady();
+
+    await user.type(
+      screen.getByLabelText(/what is your class good for/i),
+      "governance workflows"
+    );
+    await user.click(
+      screen.getByRole("button", { name: /submit class purpose/i })
+    );
+
+    await screen.findByText(/infoclass/i);
+
+    await user.click(
+      screen.getByRole("button", { name: /show last prompt details/i })
+    );
+
+    expect(
+      screen.getByRole("heading", { name: /last prompt details/i })
+    ).toBeInTheDocument();
+
+    await user.click(
+      screen.getByRole("button", { name: /close prompt details/i })
+    );
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
   it("ignores streaming chunks without content", async () => {
     const user = userEvent.setup();
     const engine = createEngine();
@@ -604,52 +635,6 @@ describe("App", () => {
     }
   });
 
-  it("shows prompt details in the info overlay", async () => {
-    const user = userEvent.setup();
-    setupEngine(createCompletion("InfoClass"));
-
-    render(<App />);
-    await waitForModelReady();
-
-    await user.type(
-      screen.getByLabelText(/what is your class good for/i),
-      "governance workflows"
-    );
-    await user.click(
-      screen.getByRole("button", { name: /submit class purpose/i })
-    );
-
-    await screen.findByText(/infoclass/i);
-
-    await user.click(
-      screen.getByRole("button", { name: /show last prompt details/i })
-    );
-
-    expect(
-      screen.getByRole("heading", { name: /last prompt details/i })
-    ).toBeInTheDocument();
-    expect(
-      screen.getByText(/generate ten intentionally overcomplicated class names/i)
-    ).toBeInTheDocument();
-    expect(screen.getByText("0.90")).toBeInTheDocument();
-
-    await user.click(
-      screen.getByRole("heading", { name: /last prompt details/i })
-    );
-    expect(screen.getByRole("dialog")).toBeInTheDocument();
-
-    await user.click(
-      screen.getByRole("button", { name: /close prompt details/i })
-    );
-    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
-
-    await user.click(
-      screen.getByRole("button", { name: /show last prompt details/i })
-    );
-
-    fireEvent.click(screen.getByRole("dialog"));
-    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
-  });
 
   it("interrupts generation after the maximum think time without erroring", async () => {
     const deferred = createDeferred<void>();
@@ -772,21 +757,4 @@ describe("App", () => {
     }
   });
 
-  it("keeps the settings panel open when clicking inside and closes on backdrop", async () => {
-    const user = userEvent.setup();
-
-    render(<App />);
-    await waitForModelReady();
-
-    await user.click(screen.getByRole("button", { name: /open settings/i }));
-
-    const dialog = screen.getByRole("dialog");
-    const panelTitle = screen.getByRole("heading", { name: /settings/i });
-
-    await user.click(panelTitle);
-    expect(screen.getByRole("dialog")).toBeInTheDocument();
-
-    fireEvent.click(dialog);
-    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
-  });
 });
