@@ -1,4 +1,11 @@
-import { act, fireEvent, render, screen, within } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
@@ -28,15 +35,33 @@ describe("App", () => {
     choices: [{ message: { content } }]
   });
 
-  const setupEngine = (result: ChatCompletion | Error) => {
-    const engine: MockEngine = {
-      chat: {
-        completions: {
-          create: vi.fn()
-        }
-      },
-      resetChat: vi.fn()
+  const createEngine = (): MockEngine => ({
+    chat: {
+      completions: {
+        create: vi.fn()
+      }
+    },
+    resetChat: vi.fn()
+  });
+
+  const createDeferred = <T,>() => {
+    let resolve: (value: T) => void;
+    let reject: (error: Error) => void;
+
+    const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+      resolve = resolvePromise;
+      reject = rejectPromise;
+    });
+
+    return {
+      promise,
+      resolve: resolve!,
+      reject: reject!
     };
+  };
+
+  const setupEngine = (result: ChatCompletion | Error) => {
+    const engine = createEngine();
 
     if (result instanceof Error) {
       engine.chat.completions.create.mockRejectedValue(result);
@@ -48,11 +73,24 @@ describe("App", () => {
     return engine;
   };
 
+  const waitForModelReady = async () => {
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: /submit class purpose/i })
+      ).toBeEnabled()
+    );
+  };
+
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(createWebLlmEngine).mockResolvedValue(createEngine());
   });
 
-  it("renders the input form and initial state", () => {
+  it("renders the input form and model loading state on mount", async () => {
+    vi.mocked(createWebLlmEngine).mockReturnValue(
+      new Promise<MockEngine>(() => undefined)
+    );
+
     render(<App />);
 
     expect(
@@ -68,20 +106,34 @@ describe("App", () => {
       screen.getByRole("button", { name: /submit class purpose/i })
     ).toBeDisabled();
     expect(
+      screen.getByRole("button", { name: /open settings/i })
+    ).toBeInTheDocument();
+    expect(
       screen.getByText(/submit a class purpose to generate class names/i)
+    ).toBeInTheDocument();
+
+    expect(
+      await screen.findByRole("progressbar", {
+        name: /model loading progress/i
+      })
     ).toBeInTheDocument();
   });
 
-  it("applies the styled layout classes", () => {
+  it("applies the styled layout classes", async () => {
     render(<App />);
+
+    await waitForModelReady();
 
     expect(document.querySelector("main.page")).toBeTruthy();
     expect(document.querySelector("section.card")).toBeTruthy();
     expect(document.querySelector("section.output")).toBeTruthy();
   });
 
-  it("does not submit when the input is empty", () => {
+  it("does not submit when the input is empty", async () => {
+    const engine = setupEngine(createCompletion("Ignored"));
+
     render(<App />);
+    await waitForModelReady();
 
     const form = screen
       .getByLabelText(/what is your class good for/i)
@@ -90,7 +142,7 @@ describe("App", () => {
     expect(form).not.toBeNull();
     fireEvent.submit(form as HTMLFormElement);
 
-    expect(createWebLlmEngine).not.toHaveBeenCalled();
+    expect(engine.chat.completions.create).not.toHaveBeenCalled();
   });
 
   it("submits the prompt to webllm and renders output", async () => {
@@ -100,6 +152,7 @@ describe("App", () => {
     );
 
     render(<App />);
+    await waitForModelReady();
 
     const input = screen.getByLabelText(/what is your class good for/i);
     await user.type(input, "data ingestion pipelines");
@@ -117,12 +170,11 @@ describe("App", () => {
       expect.any(Function)
     );
     expect(engine.chat.completions.create).toHaveBeenCalledWith({
-      messages: [{ role: "user", content: expectedPrompt }]
+      messages: [{ role: "user", content: expectedPrompt }],
+      temperature: 0.7
     });
 
-    expect(
-      await screen.findByText(/complexclassone/i)
-    ).toBeInTheDocument();
+    expect(await screen.findByText(/complexclassone/i)).toBeInTheDocument();
     expect(engine.resetChat).toHaveBeenCalledTimes(1);
   });
 
@@ -131,6 +183,7 @@ describe("App", () => {
     const engine = setupEngine(createCompletion(""));
 
     render(<App />);
+    await waitForModelReady();
 
     const input = screen.getByLabelText(/what is your class good for/i);
     await user.type(input, "batch jobs");
@@ -152,13 +205,10 @@ describe("App", () => {
   });
 
   it("shows model loading progress while initializing", async () => {
-    const user = userEvent.setup();
     let resolveEngine: (engine: MockEngine) => void;
-    let progressCallback: ((report: {
-      progress: number;
-      timeElapsed: number;
-      text: string;
-    }) => void) | null = null;
+    let progressCallback:
+      | ((report: { progress: number; timeElapsed: number; text: string }) => void)
+      | null = null;
 
     const engine: MockEngine = {
       chat: {
@@ -182,17 +232,6 @@ describe("App", () => {
 
     render(<App />);
 
-    const input = screen.getByLabelText(/what is your class good for/i);
-    await user.type(input, "log routing");
-    await user.click(
-      screen.getByRole("button", { name: /submit class purpose/i })
-    );
-
-    expect(
-      screen.getByRole("button", { name: /submit class purpose/i })
-    ).toBeDisabled();
-    expect(input).toBeEnabled();
-
     const progressBar = await screen.findByRole("progressbar", {
       name: /model loading progress/i
     });
@@ -215,9 +254,42 @@ describe("App", () => {
       resolveEngine(engine);
     });
 
-    expect(
-      await screen.findByText(/loadedclass/i)
-    ).toBeInTheDocument();
+    await waitForModelReady();
+  });
+
+  it("ignores progress updates after unmount", async () => {
+    const deferred = createDeferred<MockEngine>();
+    let progressCallback:
+      | ((report: { progress: number; timeElapsed: number; text: string }) => void)
+      | null = null;
+
+    vi.mocked(createWebLlmEngine).mockImplementation(
+      async (_modelId, onProgress) => {
+        progressCallback = onProgress ?? null;
+        return deferred.promise;
+      }
+    );
+
+    const { unmount } = render(<App />);
+    unmount();
+
+    await act(async () => {
+      progressCallback?.({ progress: 0.9, timeElapsed: 2, text: "Late update" });
+      deferred.resolve(createEngine());
+    });
+  });
+
+  it("ignores model load failures after unmount", async () => {
+    const deferred = createDeferred<MockEngine>();
+
+    vi.mocked(createWebLlmEngine).mockReturnValue(deferred.promise);
+
+    const { unmount } = render(<App />);
+    unmount();
+
+    await act(async () => {
+      deferred.reject(new Error("late fail"));
+    });
   });
 
   it("handles missing content in the completion response", async () => {
@@ -225,6 +297,7 @@ describe("App", () => {
     setupEngine({ choices: [{}] });
 
     render(<App />);
+    await waitForModelReady();
 
     await user.type(
       screen.getByLabelText(/what is your class good for/i),
@@ -234,9 +307,7 @@ describe("App", () => {
       screen.getByRole("button", { name: /submit class purpose/i })
     );
 
-    expect(
-      await screen.findByText(/no response received/i)
-    ).toBeInTheDocument();
+    expect(await screen.findByText(/no response received/i)).toBeInTheDocument();
   });
 
   it("shows a loading state while generating", async () => {
@@ -258,6 +329,7 @@ describe("App", () => {
     vi.mocked(createWebLlmEngine).mockResolvedValue(engine);
 
     render(<App />);
+    await waitForModelReady();
 
     await user.type(
       screen.getByLabelText(/what is your class good for/i),
@@ -276,9 +348,7 @@ describe("App", () => {
     ).toBeInTheDocument();
 
     resolveCompletion(createCompletion("StreamyClass"));
-    expect(
-      await screen.findByText(/streamyclass/i)
-    ).toBeInTheDocument();
+    expect(await screen.findByText(/streamyclass/i)).toBeInTheDocument();
   });
 
   it("shows an error message if generation fails", async () => {
@@ -286,6 +356,7 @@ describe("App", () => {
     setupEngine(new Error("Boom"));
 
     render(<App />);
+    await waitForModelReady();
 
     await user.type(
       screen.getByLabelText(/what is your class good for/i),
@@ -295,8 +366,105 @@ describe("App", () => {
       screen.getByRole("button", { name: /submit class purpose/i })
     );
 
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      /unable to generate class names/i
+    );
+  });
+
+  it("shows model load errors when initialization fails", async () => {
+    vi.mocked(createWebLlmEngine).mockRejectedValue(new Error("nope"));
+
+    render(<App />);
+
     expect(
-      await screen.findByRole("alert")
-    ).toHaveTextContent(/unable to generate class names/i);
+      await screen.findByText(/unable to load the model\. please refresh/i)
+    ).toBeInTheDocument();
+
+    const alerts = await screen.findAllByRole("alert");
+    expect(
+      alerts.some((alert) =>
+        /unable to load the model right now/i.test(alert.textContent ?? "")
+      )
+    ).toBe(true);
+  });
+
+  it("handles missing engines after model load", async () => {
+    const user = userEvent.setup();
+    vi.mocked(createWebLlmEngine).mockResolvedValue(
+      null as unknown as MockEngine
+    );
+
+    render(<App />);
+    await waitForModelReady();
+
+    await user.type(
+      screen.getByLabelText(/what is your class good for/i),
+      "audit pipelines"
+    );
+    await user.click(
+      screen.getByRole("button", { name: /submit class purpose/i })
+    );
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      /unable to generate class names/i
+    );
+  });
+
+  it("lets users edit the prompt template and temperature", async () => {
+    const user = userEvent.setup();
+    const engine = setupEngine(createCompletion("CustomClass"));
+
+    render(<App />);
+    await waitForModelReady();
+
+    await user.click(screen.getByRole("button", { name: /open settings/i }));
+
+    const templateInput = screen.getByLabelText(/prompt template/i);
+    fireEvent.change(templateInput, {
+      target: { value: "Custom prompt for {{CLASS_PURPOSE}} with extras" }
+    });
+
+    const temperatureInput = screen.getByLabelText(/temperature/i);
+    fireEvent.change(temperatureInput, { target: { value: "0.3" } });
+
+    await user.click(
+      screen.getByRole("button", { name: /close settings/i })
+    );
+
+    await user.type(
+      screen.getByLabelText(/what is your class good for/i),
+      "audit trails"
+    );
+    await user.click(
+      screen.getByRole("button", { name: /submit class purpose/i })
+    );
+
+    expect(engine.chat.completions.create).toHaveBeenCalledWith({
+      messages: [
+        {
+          role: "user",
+          content: "Custom prompt for audit trails with extras"
+        }
+      ],
+      temperature: 0.3
+    });
+  });
+
+  it("keeps the settings panel open when clicking inside and closes on backdrop", async () => {
+    const user = userEvent.setup();
+
+    render(<App />);
+    await waitForModelReady();
+
+    await user.click(screen.getByRole("button", { name: /open settings/i }));
+
+    const dialog = screen.getByRole("dialog");
+    const panelTitle = screen.getByRole("heading", { name: /settings/i });
+
+    await user.click(panelTitle);
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+
+    fireEvent.click(dialog);
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 });
